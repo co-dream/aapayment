@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AA收數神器</title>
+    
+    <!-- 解決亂碼問題的關鍵設定 -->
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    <!-- Tailwind CSS (樣式庫) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 加入 Babel 用於即時編譯 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 載入 React 和 Lucide 圖標庫 (使用 ES Modules) -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+            }
+        }
+    </script>
+
+    <style>
+        /* 隱藏滾動條但保持功能 */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* 防止 iOS 點擊高亮 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background-color: #f9fafb; /* bg-gray-50 */
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- 注意這裡改成了 type="text/babel" 並加上 data-type="module" -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useMemo, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Plus, Trash2, User, DollarSign, Users, Receipt, Share2, Copy, CheckCircle, Wallet, List, Calculator, RotateCcw, AlertCircle, X } from 'lucide-react';
+
+        const App = () => {
+            // --- 狀態管理 (加入 LocalStorage 讀取) ---
+            const [users, setUsers] = useState(() => {
+                try {
+                const savedUsers = localStorage.getItem('aa_users');
+                // 預設只有 '我'
+                return savedUsers ? JSON.parse(savedUsers) : ['我'];
+                } catch (e) {
+                return ['我'];
+                }
+            });
+
+            const [newUser, setNewUser] = useState('');
+            
+            const [expenses, setExpenses] = useState(() => {
+                try {
+                const savedExpenses = localStorage.getItem('aa_expenses');
+                return savedExpenses ? JSON.parse(savedExpenses) : [];
+                } catch (e) {
+                return [];
+                }
+            });
+
+            const [newExpense, setNewExpense] = useState({
+                title: '',
+                amount: '',
+                payer: users[0] || '我',
+                involved: [] 
+            });
+
+            const [activeTab, setActiveTab] = useState('input'); // 'input' | 'expenses' | 'result'
+            const [copySuccess, setCopySuccess] = useState(false);
+
+            // --- 自定義確認視窗狀態 ---
+            const [modal, setModal] = useState({
+                isOpen: false,
+                title: '',
+                message: '',
+                type: 'confirm', // 'confirm' | 'alert'
+                onConfirm: () => {}
+            });
+
+            // 防止 iOS 輸入時自動放大 (字體需 >= 16px)
+            const inputBaseClass = "w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-base text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all";
+
+            // --- 自動儲存 (Auto Save) ---
+            useEffect(() => {
+                localStorage.setItem('aa_users', JSON.stringify(users));
+            }, [users]);
+
+            useEffect(() => {
+                localStorage.setItem('aa_expenses', JSON.stringify(expenses));
+            }, [expenses]);
+
+            // 當使用者列表變更時，確保 newExpense.payer 是有效的
+            useEffect(() => {
+                if (!users.includes(newExpense.payer) && users.length > 0) {
+                setNewExpense(prev => ({ ...prev, payer: users[0] }));
+                }
+            }, [users, newExpense.payer]);
+
+
+            // --- Helper: 開啟模態視窗 ---
+            const showConfirm = (title, message, onConfirm) => {
+                setModal({ isOpen: true, title, message, type: 'confirm', onConfirm });
+            };
+
+            const showAlert = (title, message) => {
+                setModal({ isOpen: true, title, message, type: 'alert', onConfirm: () => {} });
+            };
+
+            const closeModal = () => {
+                setModal(prev => ({ ...prev, isOpen: false }));
+            };
+
+
+            // --- 清除數據功能 ---
+            const handleClearAll = () => {
+                showConfirm(
+                '清除數據',
+                '確定要清除所有數據嗎？這將會刪除所有參與者和消費記錄，且無法復原。',
+                () => {
+                    const defaultUsers = ['我'];
+                    setUsers(defaultUsers);
+                    setExpenses([]);
+                    setNewExpense({
+                    title: '',
+                    amount: '',
+                    payer: defaultUsers[0],
+                    involved: []
+                    });
+                    localStorage.removeItem('aa_users');
+                    localStorage.removeItem('aa_expenses');
+                    setActiveTab('input');
+                    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+                }
+                );
+            };
+
+            // --- 參與者邏輯 ---
+            const addUser = () => {
+                if (newUser.trim() && !users.includes(newUser.trim())) {
+                setUsers([...users, newUser.trim()]);
+                setNewUser('');
+                }
+            };
+
+            const removeUser = (nameToRemove) => {
+                if (users.length <= 1) {
+                showAlert('無法刪除', '最少要有一個參與者');
+                return;
+                }
+                
+                showConfirm(
+                '刪除參與者',
+                `確定要刪除 "${nameToRemove}" 嗎？\n涉及該人的消費記錄也會被更新。`,
+                () => {
+                    setUsers(users.filter(u => u !== nameToRemove));
+                    // 更新相關消費記錄：移除該參與者，若該人是付款人則轉移給第一個人
+                    setExpenses(expenses.map(exp => ({
+                    ...exp,
+                    involved: exp.involved.filter(u => u !== nameToRemove),
+                    payer: exp.payer === nameToRemove ? users.find(u => u !== nameToRemove) || 'Unknown' : exp.payer
+                    })));
+                }
+                );
+            };
+
+            // --- 消費記錄邏輯 ---
+            const addExpense = () => {
+                if (!newExpense.title || !newExpense.amount) return;
+                
+                const involvedUsers = newExpense.involved.length > 0 ? newExpense.involved : users;
+
+                const expenseItem = {
+                id: Date.now(),
+                title: newExpense.title,
+                amount: parseFloat(newExpense.amount),
+                payer: newExpense.payer,
+                involved: involvedUsers,
+                date: new Date().toLocaleTimeString()
+                };
+
+                setExpenses([expenseItem, ...expenses]); 
+                setNewExpense({ title: '', amount: '', payer: users[0], involved: [] }); 
+                // 加入後震動反饋 (手機瀏覽器支援的話)
+                if (navigator.vibrate) navigator.vibrate(50);
+            };
+
+            const removeExpense = (id) => {
+                showConfirm(
+                '刪除記錄',
+                '確定刪除這筆消費記錄？',
+                () => {
+                    setExpenses(expenses.filter(e => e.id !== id));
+                }
+                );
+            };
+
+            const toggleInvolved = (userName) => {
+                const currentInvolved = newExpense.involved.length > 0 ? newExpense.involved : users;
+                
+                if (currentInvolved.includes(userName)) {
+                const updated = currentInvolved.filter(u => u !== userName);
+                // 如果全部都取消選取，邏輯上等於還原成「預設全員」
+                if (updated.length === 0) {
+                    setNewExpense({ ...newExpense, involved: [] });
+                } else {
+                    setNewExpense({ ...newExpense, involved: updated });
+                }
+                } else {
+                setNewExpense({ ...newExpense, involved: [...currentInvolved, userName] });
+                }
+            };
+
+            // --- 核心計算邏輯 ---
+            const settlement = useMemo(() => {
+                let balances = {};
+                users.forEach(u => balances[u] = 0);
+
+                expenses.forEach(exp => {
+                const payer = exp.payer;
+                const amount = exp.amount;
+                const involvedPeople = exp.involved;
+                
+                if (involvedPeople.length === 0) return;
+                const splitAmount = amount / involvedPeople.length;
+
+                if (balances[payer] !== undefined) balances[payer] += amount;
+                involvedPeople.forEach(person => {
+                    if (balances[person] !== undefined) balances[person] -= splitAmount;
+                });
+                });
+
+                let debtors = [];
+                let creditors = [];
+
+                Object.keys(balances).forEach(user => {
+                const amount = balances[user];
+                if (amount < -0.01) debtors.push({ user, amount }); 
+                if (amount > 0.01) creditors.push({ user, amount }); 
+                });
+
+                debtors.sort((a, b) => a.amount - b.amount); 
+                creditors.sort((a, b) => b.amount - a.amount); 
+
+                let transactions = [];
+                let i = 0; 
+                let j = 0; 
+
+                while (i < debtors.length && j < creditors.length) {
+                const debtor = debtors[i];
+                const creditor = creditors[j];
+                const amount = Math.min(Math.abs(debtor.amount), creditor.amount);
+
+                transactions.push({
+                    from: debtor.user,
+                    to: creditor.user,
+                    amount: amount.toFixed(1) 
+                });
+
+                debtor.amount += amount;
+                creditor.amount -= amount;
+
+                if (Math.abs(debtor.amount) < 0.01) i++;
+                if (creditor.amount < 0.01) j++;
+                }
+
+                const totalSpent = expenses.reduce((acc, curr) => acc + curr.amount, 0);
+                return { transactions, totalSpent, balances };
+            }, [users, expenses]);
+
+            // --- 複製文字功能 ---
+            const copyToClipboard = () => {
+                let text = `🧾 *AA收數結算* (總數: $${settlement.totalSpent.toFixed(1)})\n\n`;
+                settlement.transactions.forEach(t => {
+                text += `🔴 ${t.from} 給 ${t.to}: $${t.amount}\n`;
+                });
+                text += `\n--------\nGenerated by AA收數神器`;
+                
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                document.execCommand('copy');
+                setCopySuccess(true);
+                if (navigator.vibrate) navigator.vibrate(100);
+                setTimeout(() => setCopySuccess(false), 2000);
+                } catch (err) {
+                console.error('Copy failed', err);
+                }
+                document.body.removeChild(textArea);
+            };
+
+            // --- 滾動到頂部當切換 Tab 時 ---
+            useEffect(() => {
+                window.scrollTo(0, 0);
+            }, [activeTab]);
+
+            return (
+                <div className="min-h-screen bg-gray-50 flex flex-col font-sans max-w-md mx-auto shadow-2xl relative">
+                
+                {/* 自定義確認視窗 (Modal) */}
+                {modal.isOpen && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                        <div 
+                        className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+                        onClick={closeModal}
+                        ></div>
+                        <div className="bg-white rounded-2xl w-full max-w-xs shadow-2xl p-6 relative z-10 animate-in zoom-in-95 duration-200 border border-gray-100">
+                            <div className="flex items-center gap-3 mb-3">
+                            {modal.type === 'alert' ? <AlertCircle className="text-red-500" /> : <AlertCircle className="text-indigo-500" />}
+                            <h3 className="text-lg font-bold text-gray-800">{modal.title}</h3>
+                            </div>
+                            <p className="text-gray-600 text-sm mb-6 whitespace-pre-line leading-relaxed">
+                                {modal.message}
+                            </p>
+                            <div className="flex gap-3">
+                                {modal.type === 'confirm' && (
+                                    <button 
+                                        onClick={closeModal}
+                                        className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm hover:bg-gray-200 transition-colors"
+                                    >
+                                        取消
+                                    </button>
+                                )}
+                                <button 
+                                    onClick={() => {
+                                        modal.onConfirm();
+                                        closeModal();
+                                    }}
+                                    className={`flex-1 py-3 rounded-xl font-bold text-sm text-white shadow-lg transition-transform active:scale-95 ${
+                                        modal.type === 'alert' ? 'bg-gray-800 hover:bg-gray-900' : 'bg-red-500 hover:bg-red-600 shadow-red-200'
+                                    }`}
+                                >
+                                    {modal.type === 'alert' ? '知道了' : '確定執行'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Mobile Header */}
+                <div className="bg-indigo-600 px-6 pt-8 pb-6 text-white rounded-b-[2rem] shadow-lg relative z-10 shrink-0">
+                    <div className="flex justify-between items-start">
+                    <div>
+                        <h1 className="text-2xl font-bold flex items-center gap-2">
+                        <Receipt className="w-6 h-6" />
+                        AA收數神器
+                        </h1>
+                        <p className="text-indigo-200 text-xs mt-1">Total: ${settlement.totalSpent.toFixed(1)}</p>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                        <div className="bg-white/20 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm flex items-center">
+                        {users.length} 人
+                        </div>
+                        {/* 清除數據按鈕 */}
+                        <button 
+                            onClick={handleClearAll}
+                            className="bg-red-500/80 hover:bg-red-500 px-3 py-2 rounded-xl text-white backdrop-blur-sm transition-colors flex items-center justify-center"
+                            title="清除所有數據"
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    </div>
+                    </div>
+                </div>
+
+                {/* Main Content Area - Padding Bottom 為了避開 Bottom Nav */}
+                <div className="flex-1 overflow-y-auto p-4 pb-32">
+                    
+                    {/* TAB 1: 記帳 (Input) */}
+                    {activeTab === 'input' && (
+                    <div className="space-y-5 animate-in fade-in zoom-in duration-300">
+                        
+                        {/* 1. 參與者設定 (可收合或精簡) */}
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                        <div className="flex justify-between items-center mb-3">
+                            <h2 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                            <Users size={16} className="text-indigo-500"/> 
+                            管理參與者
+                            </h2>
+                        </div>
+                        
+                        {/* 橫向滾動的人員列表 */}
+                        <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
+                            {users.map((u, idx) => (
+                            <div key={idx} className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-full text-sm flex items-center gap-2 whitespace-nowrap shrink-0 border border-gray-200">
+                                {u}
+                                {users.length > 1 && (
+                                <button onClick={() => removeUser(u)} className="text-gray-400 hover:text-red-500 p-1 -mr-1">
+                                    <Trash2 size={12} />
+                                </button>
+                                )}
+                            </div>
+                            ))}
+                            <div className="w-2 shrink-0"></div> {/* Spacer */}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <input 
+                            type="text" 
+                            value={newUser}
+                            onChange={(e) => setNewUser(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && addUser()}
+                            placeholder="加人名 (例: Amy)"
+                            className={`${inputBaseClass} py-2`}
+                            />
+                            <button 
+                            onClick={addUser} 
+                            disabled={!newUser}
+                            className="bg-indigo-600 text-white px-4 rounded-xl hover:bg-indigo-700 disabled:bg-gray-300 transition-colors"
+                            >
+                            <Plus size={20} />
+                            </button>
+                        </div>
+                        </div>
+
+                        {/* 2. 新增消費卡片 */}
+                        <div className="bg-white p-5 rounded-2xl shadow-md border border-indigo-50">
+                        <div className="flex items-center gap-2 mb-4">
+                            <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                            <Wallet size={20} />
+                            </div>
+                            <h2 className="text-lg font-bold text-gray-800">記一筆</h2>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            {/* 金額輸入 - 放大字體 */}
+                            <div className="relative">
+                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xl">$</div>
+                            <input 
+                                type="number" 
+                                inputMode="decimal" 
+                                placeholder="0.00"
+                                value={newExpense.amount}
+                                onChange={(e) => setNewExpense({...newExpense, amount: e.target.value})}
+                                className="w-full pl-10 bg-gray-50 border-2 border-transparent focus:border-indigo-500 rounded-2xl px-4 py-4 text-3xl font-bold text-gray-800 focus:outline-none placeholder-gray-300 transition-all text-center"
+                            />
+                            </div>
+
+                            {/* 項目名稱 */}
+                            <div>
+                            <input 
+                                type="text" 
+                                placeholder="消費項目 (例: 晚餐)"
+                                value={newExpense.title}
+                                onChange={(e) => setNewExpense({...newExpense, title: e.target.value})}
+                                className={inputBaseClass}
+                            />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                            {/* 付款人 */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">誰先付?</label>
+                                <div className="relative">
+                                <select 
+                                    value={newExpense.payer}
+                                    onChange={(e) => setNewExpense({...newExpense, payer: e.target.value})}
+                                    className={`${inputBaseClass} appearance-none pr-8`}
+                                >
+                                    {users.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                                    <User size={14} />
+                                </div>
+                                </div>
+                            </div>
+                            </div>
+
+                            {/* 涉及人員 - 改為更易點擊的區塊 */}
+                            <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-2 ml-1">
+                                分比邊個? <span className="text-gray-300 font-normal">(預設: 全員)</span>
+                            </label>
+                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-1 px-1">
+                                {users.map(u => {
+                                const isSelected = newExpense.involved.length === 0 ? true : newExpense.involved.includes(u);
+                                return (
+                                    <button
+                                    key={u}
+                                    onClick={() => toggleInvolved(u)}
+                                    className={`px-4 py-2 rounded-xl text-sm whitespace-nowrap shrink-0 transition-all border ${
+                                        isSelected 
+                                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200' 
+                                        : 'bg-white border-gray-200 text-gray-400'
+                                    }`}
+                                    >
+                                    {u}
+                                    </button>
+                                );
+                                })}
+                            </div>
+                            </div>
+
+                            <button 
+                            onClick={addExpense}
+                            disabled={!newExpense.title || !newExpense.amount}
+                            className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold text-lg shadow-xl shadow-gray-200 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed mt-4 active:scale-95 transition-transform flex items-center justify-center gap-2"
+                            >
+                            <Plus size={24} />
+                            加入清單
+                            </button>
+                        </div>
+                        </div>
+                    </div>
+                    )}
+
+                    {/* TAB 2: 消費明細 (List) */}
+                    {activeTab === 'expenses' && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                        <div className="flex justify-between items-center px-1">
+                            <h2 className="text-lg font-bold text-gray-800">消費明細 ({expenses.length})</h2>
+                        </div>
+                        {expenses.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                            <div className="bg-gray-100 p-4 rounded-full mb-4">
+                                <List size={32} className="opacity-40" />
+                            </div>
+                            <p>暫時未有消費</p>
+                            <button onClick={() => setActiveTab('input')} className="mt-4 text-indigo-600 font-medium text-sm">
+                            去記一筆 {'->'}
+                            </button>
+                        </div>
+                        ) : (
+                        expenses.map(exp => (
+                            <div key={exp.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center group active:scale-[0.99] transition-transform">
+                            <div className="flex-1 min-w-0 pr-4"> {/* min-w-0 for truncation */}
+                                <div className="flex items-center gap-2 mb-1">
+                                    <h3 className="font-bold text-gray-800 truncate">{exp.title}</h3>
+                                    <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
+                                    {new Date(exp.id).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <span className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md font-medium">
+                                    {exp.payer} 先付
+                                </span>
+                                <span className="truncate max-w-[120px]">
+                                    涉及: {exp.involved.length === users.length ? '全員' : exp.involved.join(', ')}
+                                </span>
+                                </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                                <div className="font-bold text-lg text-gray-800">${exp.amount}</div>
+                                <button 
+                                    onClick={() => removeExpense(exp.id)} 
+                                    className="text-gray-300 p-2 -mr-2 hover:text-red-500 transition-colors"
+                                >
+                                <Trash2 size={16} />
+                                </button>
+                            </div>
+                            </div>
+                        ))
+                        )}
+                    </div>
+                    )}
+
+                    {/* TAB 3: 結算結果 (Result) */}
+                    {activeTab === 'result' && (
+                    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                        
+                        {/* 結算建議卡片 */}
+                        <div className="bg-gradient-to-br from-gray-900 to-gray-800 p-6 rounded-2xl shadow-xl text-white overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                            <Share2 size={100} />
+                        </div>
+                        <h2 className="text-lg font-bold mb-6 flex items-center gap-2 relative z-10">
+                            <Share2 size={20} className="text-green-400" /> 
+                            建議轉帳
+                        </h2>
+                        
+                        {settlement.transactions.length === 0 ? (
+                            <div className="text-center py-8 text-gray-400 bg-white/5 rounded-xl border border-white/5">
+                            <CheckCircle className="w-12 h-12 mx-auto mb-3 text-green-500 opacity-80"/>
+                            <p>條數清晒！或者未有輸入。</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3 relative z-10">
+                            {settlement.transactions.map((t, i) => (
+                                <div key={i} className="bg-white/10 border border-white/10 p-4 rounded-xl flex items-center justify-between backdrop-blur-sm">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-xs text-gray-400 mb-1">Pay</span>
+                                        <div className="px-3 py-1 bg-red-500/20 text-red-300 rounded-lg text-sm font-bold">
+                                            {t.from}
+                                        </div>
+                                    </div>
+                                    <div className="text-gray-500">→</div>
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-xs text-gray-400 mb-1">Receive</span>
+                                        <div className="px-3 py-1 bg-green-500/20 text-green-300 rounded-lg text-sm font-bold">
+                                            {t.to}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="font-bold text-2xl text-white">
+                                    <span className="text-sm font-normal text-gray-400 mr-1">$</span>
+                                    {t.amount}
+                                </div>
+                                </div>
+                            ))}
+                            </div>
+                        )}
+                        </div>
+
+                        {/* 複製按鈕 */}
+                        <button 
+                        onClick={copyToClipboard}
+                        disabled={settlement.transactions.length === 0}
+                        className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 ${
+                            copySuccess 
+                            ? 'bg-green-500 text-white' 
+                            : 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:shadow-none'
+                        }`}
+                        >
+                        {copySuccess ? <CheckCircle size={20}/> : <Copy size={20}/>}
+                        {copySuccess ? '已複製！' : '複製結果 (Send to Group)'}
+                        </button>
+
+                        {/* 詳細餘額列表 */}
+                        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+                        <h3 className="text-gray-400 text-xs font-bold mb-4 uppercase tracking-wider flex items-center gap-2">
+                            <Calculator size={14}/>
+                            各人淨收支
+                        </h3>
+                        <div className="space-y-3">
+                            {Object.entries(settlement.balances).map(([user, amount]) => (
+                            <div key={user} className="flex justify-between items-center">
+                                <span className="text-gray-700 font-medium text-sm">{user}</span>
+                                <div className="flex items-center gap-2">
+                                    {/* 進度條視覺化 (簡單版) */}
+                                    <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden hidden sm:block">
+                                        <div 
+                                            className={`h-full ${amount > 0 ? 'bg-green-400' : 'bg-red-400'}`} 
+                                            style={{width: `${Math.min(Math.abs(amount) / (settlement.totalSpent || 1) * 100, 100)}%`}}
+                                        ></div>
+                                    </div>
+                                    <span className={`font-bold font-mono ${amount > 0.01 ? 'text-green-600' : amount < -0.01 ? 'text-red-500' : 'text-gray-400'}`}>
+                                    {amount > 0.01 ? `+$${amount.toFixed(1)}` : amount < -0.01 ? `-$${Math.abs(amount).toFixed(1)}` : '-'}
+                                    </span>
+                                </div>
+                            </div>
+                            ))}
+                        </div>
+                        </div>
+
+                    </div>
+                    )}
+                </div>
+
+                {/* Bottom Navigation Bar */}
+                <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-6 py-2 pb-6 z-50 flex justify-between items-center text-xs font-medium text-gray-400 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                    <button 
+                        onClick={() => setActiveTab('input')}
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-colors ${activeTab === 'input' ? 'text-indigo-600' : 'hover:text-gray-600'}`}
+                    >
+                        <div className={`p-1 rounded-full ${activeTab === 'input' ? 'bg-indigo-50' : ''}`}>
+                            <Plus size={24} strokeWidth={activeTab === 'input' ? 2.5 : 2} />
+                        </div>
+                        <span>記帳</span>
+                    </button>
+
+                    <button 
+                        onClick={() => setActiveTab('expenses')}
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-colors ${activeTab === 'expenses' ? 'text-indigo-600' : 'hover:text-gray-600'}`}
+                    >
+                        <div className={`p-1 rounded-full ${activeTab === 'expenses' ? 'bg-indigo-50' : ''}`}>
+                            <List size={24} strokeWidth={activeTab === 'expenses' ? 2.5 : 2} />
+                        </div>
+                        <span>明細</span>
+                    </button>
+
+                    <button 
+                        onClick={() => setActiveTab('result')}
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-colors ${activeTab === 'result' ? 'text-indigo-600' : 'hover:text-gray-600'}`}
+                    >
+                        <div className={`p-1 rounded-full ${activeTab === 'result' ? 'bg-indigo-50' : ''}`}>
+                            <Calculator size={24} strokeWidth={activeTab === 'result' ? 2.5 : 2} />
+                        </div>
+                        <span>結算</span>
+                    </button>
+                </div>
+
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
