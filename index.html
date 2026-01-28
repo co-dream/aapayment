@@ -26,14 +26,26 @@
     </script>
 
     <style>
-        /* 隱藏滾動條但保持功能 */
-        .scrollbar-hide::-webkit-scrollbar {
-            display: none;
+        /* 新增：自定義可見滾動條 (用於多人名單) */
+        .custom-scrollbar {
+            -webkit-overflow-scrolling: touch; /* iOS 流暢滾動 */
         }
-        .scrollbar-hide {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 6px; /* 橫向滾動條高度 */
+            width: 6px;  /* 縱向滾動條寬度 */
         }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9; /* slate-100 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1; /* slate-300 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; /* slate-400 */
+        }
+
         /* 防止 iOS 點擊高亮 */
         * {
             -webkit-tap-highlight-color: transparent;
@@ -50,7 +62,7 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useMemo, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Plus, Trash2, User, DollarSign, Users, Receipt, Share2, Copy, CheckCircle, Wallet, List, Calculator, RotateCcw, AlertCircle, X } from 'lucide-react';
+        import { Plus, Trash2, User, DollarSign, Users, Receipt, Share2, Copy, CheckCircle, Wallet, List, Calculator, RotateCcw, AlertCircle, X, CheckSquare, Square, ArrowRightLeft, UserCheck } from 'lucide-react';
 
         const App = () => {
             // --- 狀態管理 (加入 LocalStorage 讀取) ---
@@ -79,8 +91,13 @@
                 title: '',
                 amount: '',
                 payer: users[0] || '我',
-                involved: [] 
+                involved: [] // [] 代表預設全員, ['__NONE__'] 代表全不選
             });
+
+            // 新增：結算模式狀態 'smart' | 'banker'
+            const [settlementMode, setSettlementMode] = useState('smart');
+            // 新增：集中收數人
+            const [banker, setBanker] = useState(users[0] || '我');
 
             const [activeTab, setActiveTab] = useState('input'); // 'input' | 'expenses' | 'result'
             const [copySuccess, setCopySuccess] = useState(false);
@@ -106,12 +123,15 @@
                 localStorage.setItem('aa_expenses', JSON.stringify(expenses));
             }, [expenses]);
 
-            // 當使用者列表變更時，確保 newExpense.payer 是有效的
+            // 當使用者列表變更時，確保 newExpense.payer 和 banker 是有效的
             useEffect(() => {
                 if (!users.includes(newExpense.payer) && users.length > 0) {
-                setNewExpense(prev => ({ ...prev, payer: users[0] }));
+                    setNewExpense(prev => ({ ...prev, payer: users[0] }));
                 }
-            }, [users, newExpense.payer]);
+                if (!users.includes(banker) && users.length > 0) {
+                    setBanker(users[0]);
+                }
+            }, [users, newExpense.payer, banker]);
 
 
             // --- Helper: 開啟模態視窗 ---
@@ -143,6 +163,8 @@
                     payer: defaultUsers[0],
                     involved: []
                     });
+                    setSettlementMode('smart');
+                    setBanker(defaultUsers[0]);
                     localStorage.removeItem('aa_users');
                     localStorage.removeItem('aa_expenses');
                     setActiveTab('input');
@@ -170,7 +192,7 @@
                 `確定要刪除 "${nameToRemove}" 嗎？\n涉及該人的消費記錄也會被更新。`,
                 () => {
                     setUsers(users.filter(u => u !== nameToRemove));
-                    // 更新相關消費記錄：移除該參與者，若該人是付款人則轉移給第一個人
+                    // 更新相關消費記錄
                     setExpenses(expenses.map(exp => ({
                     ...exp,
                     involved: exp.involved.filter(u => u !== nameToRemove),
@@ -180,24 +202,66 @@
                 );
             };
 
-            // --- 消費記錄邏輯 ---
+            // --- 消費記錄邏輯 & 全選/全不選 ---
+            const handleSelectAll = () => {
+                setNewExpense({ ...newExpense, involved: [] }); // 空陣列 = 預設全員
+            };
+
+            const handleSelectNone = () => {
+                setNewExpense({ ...newExpense, involved: ['__NONE__'] }); // 特殊標記 = 沒人
+            };
+
+            const toggleInvolved = (userName) => {
+                let currentInvolved;
+                
+                if (newExpense.involved.includes('__NONE__')) {
+                    currentInvolved = [];
+                } 
+                else if (newExpense.involved.length === 0) {
+                    currentInvolved = [...users];
+                } 
+                else {
+                    currentInvolved = [...newExpense.involved];
+                }
+
+                if (currentInvolved.includes(userName)) {
+                    const updated = currentInvolved.filter(u => u !== userName);
+                    if (updated.length === 0) {
+                        setNewExpense({ ...newExpense, involved: ['__NONE__'] });
+                    } else {
+                        setNewExpense({ ...newExpense, involved: updated });
+                    }
+                } else {
+                    setNewExpense({ ...newExpense, involved: [...currentInvolved, userName] });
+                }
+            };
+
             const addExpense = () => {
                 if (!newExpense.title || !newExpense.amount) return;
                 
-                const involvedUsers = newExpense.involved.length > 0 ? newExpense.involved : users;
+                let finalInvolved = [];
+                if (newExpense.involved.length === 0) {
+                    finalInvolved = users; // 預設全員
+                } else {
+                    finalInvolved = newExpense.involved.filter(u => u !== '__NONE__');
+                }
+
+                if (finalInvolved.length === 0) {
+                    showAlert('提示', '請至少選擇一個分擔人 (涉及邊個)');
+                    return;
+                }
 
                 const expenseItem = {
-                id: Date.now(),
-                title: newExpense.title,
-                amount: parseFloat(newExpense.amount),
-                payer: newExpense.payer,
-                involved: involvedUsers,
-                date: new Date().toLocaleTimeString()
+                    id: Date.now(),
+                    title: newExpense.title,
+                    amount: parseFloat(newExpense.amount),
+                    payer: newExpense.payer,
+                    involved: finalInvolved,
+                    date: new Date().toLocaleTimeString()
                 };
 
                 setExpenses([expenseItem, ...expenses]); 
                 setNewExpense({ title: '', amount: '', payer: users[0], involved: [] }); 
-                // 加入後震動反饋 (手機瀏覽器支援的話)
                 if (navigator.vibrate) navigator.vibrate(50);
             };
 
@@ -211,26 +275,14 @@
                 );
             };
 
-            const toggleInvolved = (userName) => {
-                const currentInvolved = newExpense.involved.length > 0 ? newExpense.involved : users;
-                
-                if (currentInvolved.includes(userName)) {
-                const updated = currentInvolved.filter(u => u !== userName);
-                // 如果全部都取消選取，邏輯上等於還原成「預設全員」
-                if (updated.length === 0) {
-                    setNewExpense({ ...newExpense, involved: [] });
-                } else {
-                    setNewExpense({ ...newExpense, involved: updated });
-                }
-                } else {
-                setNewExpense({ ...newExpense, involved: [...currentInvolved, userName] });
-                }
-            };
 
             // --- 核心計算邏輯 ---
             const settlement = useMemo(() => {
+                // 1. 計算每個人的淨收支
                 let balances = {};
                 users.forEach(u => balances[u] = 0);
+
+                const totalSpent = expenses.reduce((acc, curr) => acc + curr.amount, 0);
 
                 expenses.forEach(exp => {
                 const payer = exp.payer;
@@ -246,50 +298,89 @@
                 });
                 });
 
-                let debtors = [];
-                let creditors = [];
-
-                Object.keys(balances).forEach(user => {
-                const amount = balances[user];
-                if (amount < -0.01) debtors.push({ user, amount }); 
-                if (amount > 0.01) creditors.push({ user, amount }); 
-                });
-
-                debtors.sort((a, b) => a.amount - b.amount); 
-                creditors.sort((a, b) => b.amount - a.amount); 
-
                 let transactions = [];
-                let i = 0; 
-                let j = 0; 
 
-                while (i < debtors.length && j < creditors.length) {
-                const debtor = debtors[i];
-                const creditor = creditors[j];
-                const amount = Math.min(Math.abs(debtor.amount), creditor.amount);
+                if (settlementMode === 'smart') {
+                    // --- 智能模式 (最少轉帳次數) ---
+                    let debtors = [];
+                    let creditors = [];
 
-                transactions.push({
-                    from: debtor.user,
-                    to: creditor.user,
-                    amount: amount.toFixed(1) 
-                });
+                    Object.keys(balances).forEach(user => {
+                        const amount = balances[user];
+                        if (amount < -0.01) debtors.push({ user, amount }); 
+                        if (amount > 0.01) creditors.push({ user, amount }); 
+                    });
 
-                debtor.amount += amount;
-                creditor.amount -= amount;
+                    debtors.sort((a, b) => a.amount - b.amount); 
+                    creditors.sort((a, b) => b.amount - a.amount); 
 
-                if (Math.abs(debtor.amount) < 0.01) i++;
-                if (creditor.amount < 0.01) j++;
+                    let i = 0; 
+                    let j = 0; 
+
+                    while (i < debtors.length && j < creditors.length) {
+                        const debtor = debtors[i];
+                        const creditor = creditors[j];
+                        const amount = Math.min(Math.abs(debtor.amount), creditor.amount);
+
+                        transactions.push({
+                            from: debtor.user,
+                            to: creditor.user,
+                            amount: amount.toFixed(1) 
+                        });
+
+                        debtor.amount += amount;
+                        creditor.amount -= amount;
+
+                        if (Math.abs(debtor.amount) < 0.01) i++;
+                        if (creditor.amount < 0.01) j++;
+                    }
+                } else {
+                    // --- 集中收數模式 ---
+                    // 邏輯：
+                    // 1. 欠錢的人(Balance < 0) -> 轉給 Banker
+                    // 2. Banker -> 轉給多付錢的人(Balance > 0，且不是 Banker 本人)
+                    const currentBanker = users.includes(banker) ? banker : users[0];
+
+                    Object.keys(balances).forEach(user => {
+                        if (user === currentBanker) return; // Banker 不用轉給自己
+
+                        const amount = balances[user];
+                        
+                        if (amount < -0.01) {
+                            // 欠錢，給 Banker
+                            transactions.push({
+                                from: user,
+                                to: currentBanker,
+                                amount: Math.abs(amount).toFixed(1)
+                            });
+                        } else if (amount > 0.01) {
+                            // 收錢，Banker 給他
+                            transactions.push({
+                                from: currentBanker,
+                                to: user,
+                                amount: amount.toFixed(1)
+                            });
+                        }
+                    });
                 }
 
-                const totalSpent = expenses.reduce((acc, curr) => acc + curr.amount, 0);
                 return { transactions, totalSpent, balances };
-            }, [users, expenses]);
+            }, [users, expenses, settlementMode, banker]);
 
             // --- 複製文字功能 ---
             const copyToClipboard = () => {
-                let text = `🧾 *AA收數結算* (總數: $${settlement.totalSpent.toFixed(1)})\n\n`;
-                settlement.transactions.forEach(t => {
-                text += `🔴 ${t.from} 給 ${t.to}: $${t.amount}\n`;
-                });
+                const modeText = settlementMode === 'smart' ? '智能轉帳' : `集中收數 (${banker})`;
+                let text = `🧾 *AA收數結算* [${modeText}]\n`;
+                text += `總消費: $${settlement.totalSpent.toFixed(1)}\n\n`;
+                
+                if (settlement.transactions.length === 0) {
+                     text += `無須轉帳\n`;
+                } else {
+                    settlement.transactions.forEach(t => {
+                        text += `🔴 ${t.from} 給 ${t.to}: $${t.amount}\n`;
+                    });
+                }
+                
                 text += `\n--------\nGenerated by AA收數神器`;
                 
                 const textArea = document.createElement("textarea");
@@ -399,7 +490,7 @@
                         </div>
                         
                         {/* 橫向滾動的人員列表 */}
-                        <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
+                        <div className="flex gap-2 overflow-x-auto pb-2 mb-2 custom-scrollbar">
                             {users.map((u, idx) => (
                             <div key={idx} className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-full text-sm flex items-center gap-2 whitespace-nowrap shrink-0 border border-gray-200">
                                 {u}
@@ -487,27 +578,43 @@
 
                             {/* 涉及人員 - 改為更易點擊的區塊 */}
                             <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-2 ml-1">
-                                分比邊個? <span className="text-gray-300 font-normal">(預設: 全員)</span>
-                            </label>
-                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-1 px-1">
-                                {users.map(u => {
-                                const isSelected = newExpense.involved.length === 0 ? true : newExpense.involved.includes(u);
-                                return (
-                                    <button
-                                    key={u}
-                                    onClick={() => toggleInvolved(u)}
-                                    className={`px-4 py-2 rounded-xl text-sm whitespace-nowrap shrink-0 transition-all border ${
-                                        isSelected 
-                                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200' 
-                                        : 'bg-white border-gray-200 text-gray-400'
-                                    }`}
-                                    >
-                                    {u}
-                                    </button>
-                                );
-                                })}
-                            </div>
+                                <div className="flex justify-between items-end mb-2 ml-1">
+                                    <label className="block text-xs font-medium text-gray-400">
+                                        分比邊個? <span className="text-gray-300 font-normal">(預設: 全員)</span>
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <button onClick={handleSelectAll} className="flex items-center gap-1 text-[10px] bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded text-indigo-600 transition-colors">
+                                            <CheckSquare size={12} /> 全選
+                                        </button>
+                                        <button onClick={handleSelectNone} className="flex items-center gap-1 text-[10px] bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-gray-500 transition-colors">
+                                            <Square size={12} /> 清空
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar -mx-1 px-1">
+                                    {users.map(u => {
+                                    const isSelected = (newExpense.involved.length === 0) 
+                                        ? true 
+                                        : (newExpense.involved.includes('__NONE__') 
+                                            ? false 
+                                            : newExpense.involved.includes(u));
+
+                                    return (
+                                        <button
+                                        key={u}
+                                        onClick={() => toggleInvolved(u)}
+                                        className={`px-4 py-2 rounded-xl text-sm whitespace-nowrap shrink-0 transition-all border ${
+                                            isSelected 
+                                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200' 
+                                            : 'bg-white border-gray-200 text-gray-400'
+                                        }`}
+                                        >
+                                        {u}
+                                        </button>
+                                    );
+                                    })}
+                                </div>
                             </div>
 
                             <button 
@@ -582,10 +689,49 @@
                         <div className="absolute top-0 right-0 p-4 opacity-10">
                             <Share2 size={100} />
                         </div>
-                        <h2 className="text-lg font-bold mb-6 flex items-center gap-2 relative z-10">
-                            <Share2 size={20} className="text-green-400" /> 
-                            建議轉帳
-                        </h2>
+                        
+                        <div className="flex justify-between items-start mb-4 relative z-10">
+                            <h2 className="text-lg font-bold flex items-center gap-2">
+                                <Share2 size={20} className="text-green-400" /> 
+                                建議轉帳
+                            </h2>
+                        </div>
+
+                        {/* 結算模式切換 */}
+                        <div className="relative z-10 bg-black/20 p-1 rounded-xl flex mb-4">
+                            <button 
+                                onClick={() => setSettlementMode('smart')}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    settlementMode === 'smart' ? 'bg-white/20 text-white shadow-sm' : 'text-gray-400 hover:text-white'
+                                }`}
+                            >
+                                <ArrowRightLeft size={14} /> 智能轉帳
+                            </button>
+                            <button 
+                                onClick={() => setSettlementMode('banker')}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    settlementMode === 'banker' ? 'bg-white/20 text-white shadow-sm' : 'text-gray-400 hover:text-white'
+                                }`}
+                            >
+                                <UserCheck size={14} /> 集中收數
+                            </button>
+                        </div>
+
+                        {/* 集中收數模式：選擇收數人 */}
+                        {settlementMode === 'banker' && (
+                            <div className="relative z-10 mb-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <div className="bg-white/10 border border-white/10 rounded-xl p-3 flex items-center justify-between">
+                                    <span className="text-sm text-gray-300">誰負責收錢?</span>
+                                    <select 
+                                        value={banker}
+                                        onChange={(e) => setBanker(e.target.value)}
+                                        className="bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-1 text-sm focus:outline-none focus:border-green-400"
+                                    >
+                                        {users.map(u => <option key={u} value={u}>{u}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                        )}
                         
                         {settlement.transactions.length === 0 ? (
                             <div className="text-center py-8 text-gray-400 bg-white/5 rounded-xl border border-white/5">
@@ -598,15 +744,15 @@
                                 <div key={i} className="bg-white/10 border border-white/10 p-4 rounded-xl flex items-center justify-between backdrop-blur-sm">
                                 <div className="flex items-center gap-3">
                                     <div className="flex flex-col items-center">
-                                        <span className="text-xs text-gray-400 mb-1">Pay</span>
-                                        <div className="px-3 py-1 bg-red-500/20 text-red-300 rounded-lg text-sm font-bold">
+                                        <span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">Pay</span>
+                                        <div className="px-3 py-1 bg-red-500/20 text-red-300 rounded-lg text-sm font-bold min-w-[60px] text-center">
                                             {t.from}
                                         </div>
                                     </div>
                                     <div className="text-gray-500">→</div>
                                     <div className="flex flex-col items-center">
-                                        <span className="text-xs text-gray-400 mb-1">Receive</span>
-                                        <div className="px-3 py-1 bg-green-500/20 text-green-300 rounded-lg text-sm font-bold">
+                                        <span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">Receive</span>
+                                        <div className="px-3 py-1 bg-green-500/20 text-green-300 rounded-lg text-sm font-bold min-w-[60px] text-center">
                                             {t.to}
                                         </div>
                                     </div>
