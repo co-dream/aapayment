@@ -11,8 +11,8 @@
     <!-- Tailwind CSS (樣式庫) -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- 加入 Babel 用於即時編譯 JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 加入 Babel 用於即時編譯 JSX (鎖定版本以修復 .targets["esmodules"] 錯誤) -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
     <!-- 載入 React 和 Lucide 圖標庫 (使用 ES Modules) -->
     <script type="importmap">
